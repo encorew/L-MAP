@@ -1,2 +1,2 @@
 # L-MAP
-L-MAP learnble multivariate matrix profile for time series
+L-MAP learnable multivariate matrix profile for comprehensive time series analysis.
