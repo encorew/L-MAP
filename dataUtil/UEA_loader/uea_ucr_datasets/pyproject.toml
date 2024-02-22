@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "uea_ucr_datasets"
+version = "0.1.2"
+description = "A small package for loading and handling UEA UCR time series classification datasets."
+license = "LGPL-3.0+"
+readme = "README.md"
+repository = "https://github.com/BorgwardtLab/uea_ucr_datasets"
+authors = ["Max Horn <max.horn@bsse.ethz.ch>"]
+include = ["README.md"]
+
+[tool.poetry.dependencies]
+python = ">=3.6.1"
+sktime = ">=0.3"
+
+[tool.poetry.dev-dependencies]
+pytest = "^3.0"
+
+[build-system]
+requires = ["poetry>=0.12"]
+build-backend = "poetry.masonry.api"

@@ -1,0 +1,8 @@
+/dist/
+__pycache__/
+.DS_Store
+poetry.lock
+
+*.egg-info/
+
+pip-wheel-metadata/
