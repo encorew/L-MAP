@@ -2,6 +2,7 @@ import numpy as np
 from numpy.fft import fft, ifft
 from scipy.signal import find_peaks, peak_widths, chirp
 
+
 def multi_fft(seq):
     real_freq_seq = []
     normal_freq_seq = []
@@ -14,7 +15,7 @@ def multi_fft(seq):
 
 
 def multi_ifft(frequency):
-    # shape为（time_length,dimension)
+    # shape:（time_length,dimension)
     reconstructed_series = []
     for i in range(frequency.shape[1]):
         series = ifft(frequency[:, i])

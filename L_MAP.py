@@ -3,17 +3,17 @@ import random
 
 import numpy as np
 import torch
-from matplotlib import pyplot as plt
+from sklearn.neighbors import KernelDensity
 from tqdm import tqdm
 
-from mylsh.lshash import LSHash
 from torch.utils.data import dataloader, random_split
 from dataUtil.dataSet.MShapeDataset import MShapeDataset
-from dataUtil.load import load_and_process, concatenate_data_samples
+from dataUtil.utils.data_preprocess import read_data
 from frequency import multi_fft
 from model.gcn import GCN_simple
 from model.loss.triple_loss import TripleLoss
 from sklearn.cluster import KMeans
+from mylsh.lshash import LSHash
 
 
 def seq_distance(subseq1, subseq2):
@@ -30,8 +30,11 @@ def seq_distance(subseq1, subseq2):
     return min_distance
 
 
-def generate_subsequence_candidates(train_data, length, window_stride, type="classification"):
-    if type == "classification":
+def generate_subsequence_candidates(train_data, length, window_stride, type="motif_plain"):
+    if type == "motif_plain":
+        candidates = [train_data[i:i + length].T for i in range(0, len(train_data) - length, window_stride)]
+        return candidates
+    elif type == "motif_classification":
         candidate_dict = {}
         for series_sample, series_class in train_data:
             current_class_candidates = [series_sample[i:i + length].T for i in
@@ -41,8 +44,18 @@ def generate_subsequence_candidates(train_data, length, window_stride, type="cla
             else:
                 candidate_dict[series_class] = current_class_candidates
         return candidate_dict
-    else:
+    elif type == "classification":
+        candidates = []
+        for series_sample, series_class in train_data:
+            current_instance_candidates = [series_sample[i:i + length].T for i in
+                                           range(0, len(series_sample) - length, window_stride)]
+            candidates = candidates + current_instance_candidates
+        return candidates
+    elif type == "anomaly":
         candidates = [train_data[i:i + length].T for i in range(0, len(train_data) - length, window_stride)]
+        return candidates
+    else:
+        candidates = [train_data[i:i + length].T for i in range(0, min(len(train_data) - length, 10000), window_stride)]
         return candidates
 
 
@@ -90,7 +103,7 @@ def generate_train_triple_by_frequency(subseqs_set, hash_size=5, series_num=-1):
         positive_sample = positive_samples[0]
         if len(positive_samples) > 1:
             positive_sample = positive_samples[1]
-        if not positive_sample:
+        if not positive_sample or not negative_samples:
             continue
         triple_positive_sample = np.array(positive_sample).reshape(subseq.shape[0], -1)
         triple_negative_sample = np.array(random.choice(negative_samples)).reshape(subseq.shape[0], -1)
@@ -121,18 +134,17 @@ def triple_loss_train(model, train_pairs, learning_rate, batch_size, num_epochs,
             l += loss.item()
             optimizer.step()
             optimizer.zero_grad()
-        # valid_loss = validate(model, valid_iter, loss_fn, 1, device)
         if len(valid_iter) < 1:
             valid_loss = l / len(train_iter)
         else:
             valid_loss = validate(model, valid_iter, loss_fn, batch_size, device) / len(valid_iter)
         print(f"\n==> current epoch:{epoch} loss:{l / len(train_iter)} valid_loss:{valid_loss}")
-        if 0 <= valid_loss < min_valid_loss:
+        if 0 < valid_loss <= min_valid_loss:
             print("save current state")
             min_valid_loss = valid_loss
-            os.makedirs(f"saved_state/model_parameters/{data_name}", exist_ok=True)
+            os.makedirs(f"saved_state/{data_name}/{model.model_type}", exist_ok=True)
             torch.save(model.state_dict(),
-                       f"saved_state/model_parameters/{data_name}/{state_name}.pth")
+                       f"saved_state/{data_name}/{model.model_type}/{state_name}.pth")
 
 
 def validate(model, valid_iter, loss_fn, batch_size, device):
@@ -147,7 +159,7 @@ def validate(model, valid_iter, loss_fn, batch_size, device):
     return l
 
 
-def cluster(model, candidates, cluster_num, device, class_num=-1):
+def cluster(model, candidates, cluster_num, device, radius=0.1, class_num=-1):
     embeddings = []
     if class_num != -1:
         candidates = candidates[class_num]
@@ -158,30 +170,47 @@ def cluster(model, candidates, cluster_num, device, class_num=-1):
     embeddings = np.array(embeddings)
     k_means = KMeans(n_clusters=cluster_num, random_state=10)
     k_means.fit(embeddings)
-    y_predict = k_means.predict(embeddings)
     cluster_centers = k_means.cluster_centers_
-    # plt.show()
-    return cluster_centers
+    distributions = {}
+    for idx, cluster_center in enumerate(cluster_centers):
+        distributions[idx] = [cluster_center]
+    for embedding in embeddings:
+        for idx, center in enumerate(cluster_centers):
+            if np.sum((embedding - center) ** 2) <= radius:
+                distributions[idx].append(embedding)
+    for center_idx in distributions:
+        kde = KernelDensity(bandwidth=0.5)
+        kde.fit(np.array(distributions[center_idx]))
+        distributions[center_idx] = kde
+    return distributions
 
 
-def embedding_distance(embedding1, embedding2):
+def embedding_distance_prev(embedding1, embedding2):
     return np.sum(np.square(embedding1 - embedding2), axis=1)
+
+
+def embedding_distance(embedding, distributions):
+    embedding_distances = []
+    for idx in distributions:
+        embedding_distances.append(1 - distributions[idx].score_samples(embedding))
+    embedding_distances = np.array(embedding_distances)
+    return np.min(embedding_distances), np.argmin(embedding_distances)
 
 
 def cluster_distance(model, series_sample, cluster_centers, device):
     series = torch.tensor(series_sample.T).to(device)
     series_embedding = model(series, 1, device).detach().cpu().numpy()
-    embedding_distances = embedding_distance(series_embedding, cluster_centers)
-    min_distance = np.min(embedding_distances)
-    cluster_num = np.argmin(embedding_distances)
-    # out_class_distance = 0
-    # for class_no in cluster_centers:
-    #     if current_class != class_no:
-    #         out_class_distance += np.sum(embedding_distance(series_embedding, cluster_centers[current_class]))
+    min_distance, cluster_num = embedding_distance(series_embedding, cluster_centers)
     return min_distance, cluster_num
 
 
-def generate_profile_value(model, series, seq_length, cluster_centers, cluster_num, device):
+def in_concat_region(i, seq_length, instance_length):
+    if (i // instance_length + 1) * instance_length - i < seq_length:
+        return True
+    return False
+
+
+def generate_profile_value(model, series, seq_length, cluster_centers, cluster_num, instance_length, device):
     profile_value = []
     profile_pattern = []
     pattern_distance_dict = {}
@@ -191,6 +220,8 @@ def generate_profile_value(model, series, seq_length, cluster_centers, cluster_n
         indice_dict[i] = []
     for i in tqdm(range(len(series) - seq_length)):
         distance, match_pattern = cluster_distance(model, series[i:i + seq_length, :], cluster_centers, device)
+        if BORDER_JUDGE and in_concat_region(i, seq_length, instance_length):
+            distance = float("inf")
         profile_value.append(distance)
         profile_pattern.append(match_pattern)
         pattern_distance_dict[match_pattern].append(distance)
@@ -201,48 +232,65 @@ def generate_profile_value(model, series, seq_length, cluster_centers, cluster_n
     return np.array(profile_value), np.array(profile_pattern), pattern_distance_dict, indice_dict
 
 
-def main():
-    # DATASET_LIST = ['ArticularyWordRecognition', 'AtrialFibrillation', 'BasicMotions', 'CharacterTrajectories',
-    #                 'Cricket',
-    #                 'DuckDuckGeese', 'EigenWorms', 'Epilepsy', 'ERing', 'EthanolConcentration', 'FingerMovements',
-    #                 'FaceDetection',
-    #                 'HandMovementDirection', 'Handwriting', 'Heartbeat', 'JapaneseVowels', 'LSST', 'MotorImagery',
-    #                 'NATOPS', 'PenDigits', 'Phoneme', 'RacketSports', 'SelfRegulationSCP1', 'StandWalkJump',
-    #                 'UWaveGestureLibrary']
-    DATA_FILE = 'ArticularyWordRecognition'
-    DATA_DIR = 'dataset/Multivariate2018_ts/Multivariate_ts'
-    train_data, test_data, dimension, instance_length, n_classes = load_and_process(DATA_FILE, DATA_DIR)
-    concatenated_data, _ = concatenate_data_samples(train_data)
+def generate_classification_profile(model, train_data, seq_length, cluster_centers, cluster_num, device):
+    distances_of_all_classes = {}
+    indices_of_all_classes = {}
+    for series, class_num in tqdm(train_data):
+        print(f"class:{class_num}")
+        pattern_distance_dict = {}
+        indice_dict = {}
+        for i in range(cluster_num):
+            pattern_distance_dict[i] = []
+            indice_dict[i] = []
+        for i in tqdm(range(len(series) - seq_length)):
+            distance, match_pattern = cluster_distance(model, series[i:i + seq_length, :], cluster_centers, device)
+            pattern_distance_dict[match_pattern].append(distance)
+            indice_dict[match_pattern].append(i)
+        distances_of_all_classes[class_num] = pattern_distance_dict
+        indices_of_all_classes[class_num] = indice_dict
+    return distances_of_all_classes, indices_of_all_classes
 
+
+SERIES_NUM = -1
+BORDER_JUDGE = False
+torch.manual_seed(42)
+
+
+def main():
+    dataset_dir = "dataset"
+    data_name = "xxx.pkl"
+    data = read_data(dataset_dir, data_name)[:10000]
+    dimension = data.shape[1]
     HIDDEN_SIZE = 64
-    SEQ_LENGTH = 100
+    SEQ_LENGTH = 50
     WINDOW_STRIDE = SEQ_LENGTH // 2
-    CLUSTER_NUM = 2
-    BATCH_SIZE = 4
-    NUM_EPOCHS = 100
+    CLUSTER_NUM = 3
+    BATCH_SIZE = 32
+    NUM_EPOCHS = 50
     EMBEDDING_DIM = 15
-    SERIES_NUM = 1
-    TRAIN = False
+    TRAIN = True
+    STATE_NAME = f"H{HIDDEN_SIZE}_S{SEQ_LENGTH}_E{EMBEDDING_DIM}_class{SERIES_NUM}"
     device = torch.device('cuda' if torch.cuda.is_available else 'cpu')
-    criterion = torch.nn.MSELoss()
-    demonstrate_data = concatenated_data
-    candidates = generate_subsequence_candidates(demonstrate_data, SEQ_LENGTH, WINDOW_STRIDE)
-    triple = generate_train_triple_by_frequency(candidates, hash_size=5, series_num=0)
+    candidates = generate_subsequence_candidates(data, SEQ_LENGTH, WINDOW_STRIDE)
     model = GCN_simple(input_series_length=SEQ_LENGTH, input_series_dim=dimension, hidden_channels=HIDDEN_SIZE,
                        output_dimension=EMBEDDING_DIM)
     model = model.to(device)
-    triple_loss_train(model, triple, learning_rate=0.001, batch_size=BATCH_SIZE, num_epochs=NUM_EPOCHS,
-                      device=device, name=DATA_FILE, train=TRAIN)
-    cluster_centers = cluster(model, candidates, cluster_num=CLUSTER_NUM, device=device, class_num=0)
+    if TRAIN:
+        triple = generate_train_triple_by_frequency(candidates, hash_size=5, series_num=SERIES_NUM)
+        triple_loss_train(model, triple, learning_rate=0.001, batch_size=BATCH_SIZE, num_epochs=NUM_EPOCHS,
+                          device=device, data_name=data_name, state_name=STATE_NAME)
+    else:
+        model.load_state_dict(
+            torch.load(os.path.join("saved_state", data_name, model.model_type, STATE_NAME + '.pth')))
+    distributions = cluster(model, candidates, cluster_num=CLUSTER_NUM, device=device, class_num=SERIES_NUM)
+    # generate profile value of each point and its corresponding distribution
     my_profile, profile_pattern, pattern_distance_dict, indice_dict = generate_profile_value(model,
-                                                                                             demonstrate_data[0][0],
+                                                                                             data,
                                                                                              SEQ_LENGTH,
-                                                                                             cluster_centers,
+                                                                                             distributions,
                                                                                              CLUSTER_NUM,
+                                                                                             10,
                                                                                              device)
-    plt.plot(my_profile, c="green")
-    plt.show()
-
 
 if __name__ == '__main__':
     main()

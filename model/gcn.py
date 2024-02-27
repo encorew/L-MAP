@@ -29,8 +29,6 @@ class GCN(torch.nn.Module):
 
         # 2. Readout layer
         x = global_mean_pool(x, batch)  # [batch_size, hidden_channels]
-
-        # 3.
         x = F.dropout(x, p=0.5, training=self.training)
         x = self.lin(x)
 

@@ -14,9 +14,10 @@ def replace_nan_in_data(raw_ts_dataset):
 
 
 def series_info(train, test):
-    print(f"-> time series dim: {train[0][0].shape[1]}")
-    print(f"-> train sample length: {train[0][0].shape[0]} test sample length:{test[0][0].shape[0]}")
-    print(f"-> train size:{len(train)} test size:{len(test)} ratio {round(len(train) / len(test), 2)}:1.0")
+    print(f"-> dim: {train[0][0].shape[1]}")
+    print(f"-> trainset length: {train[0][0].shape[0]} testset length:{test[0][0].shape[0]}")
+    print(f"-> train num:{len(train)} test num:{len(test)} ratio {round(len(train) / len(test), 2)}:1.0")
+
 
 def draw_series(dataset, dim=-1, show_classes=4):
     if dim == -1:
@@ -28,28 +29,21 @@ def draw_series(dataset, dim=-1, show_classes=4):
         plt.plot(dataset[i][0][:, dim])
     plt.show()
 
+
 def concatenate_data_samples(dataset, concat_mode=0):
     prev_label = dataset[0][1]
-    concatenated_series = []
+    concatenated_series = {}
     prev_samples = []
     for series_sample, label in dataset:
-        if label != prev_label:
-            prev_samples = np.concatenate(prev_samples, axis=0)
-            concatenated_series.append((prev_samples, prev_label))
-            prev_samples = [series_sample]
+        if label not in concatenated_series:
+            concatenated_series[label] = series_sample
         else:
-            prev_samples.append(series_sample)
-        prev_label = label
-    prev_samples = np.concatenate(prev_samples, axis=0)
-    concatenated_series.append((prev_samples, prev_label))
+            concatenated_series[label] = np.concatenate([concatenated_series[label], series_sample], axis=0)
+    concatenated_series = [(concatenated_series[label], label) for label in concatenated_series]
     return concatenated_series, len(concatenated_series)
 
 
-
 def load_and_process(dataset_name, dataset_dir, show_info=True):
-    '''
-    :return: list: [(numpy_0,label_0),(numpy_1,label_1),...,(numpy_n,label_n)]
-    '''
     train_ts_dataset = Multi_variate_data(dataset_name=dataset_name, data_dir=dataset_dir,
                                           train=True)
     raw_train_ts_dataset = train_ts_dataset.scattered_data
@@ -57,6 +51,7 @@ def load_and_process(dataset_name, dataset_dir, show_info=True):
     raw_test_ts_dataset = Multi_variate_data(dataset_name=dataset_name, data_dir=dataset_dir,
                                              train=False).scattered_data
     raw_test_ts_dataset = replace_nan_in_data(raw_test_ts_dataset)
+    print(f"current data:{dataset_name}")
     if show_info:
         series_info(raw_train_ts_dataset, raw_test_ts_dataset)
     return raw_train_ts_dataset, raw_test_ts_dataset, raw_train_ts_dataset[0][0].shape[1], \

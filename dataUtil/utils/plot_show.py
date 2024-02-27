@@ -18,7 +18,6 @@ class Plot:
 
     def draw(self, select_dim=0):
         if len(self.raw_data.shape) > 1:
-            # 多维
             plt.plot(self.time, self.raw_data[:, select_dim])
             if self.prediction != np.array([0, 0]):
                 plt.plot(self.time, self.prediction[:, select_dim])
@@ -46,6 +45,7 @@ def draw_anomaly(raw_data, labels):
             anomaly_regions.append((region_left, region_right))
     for region in anomaly_regions:
         plt.axvspan(xmin=region[0], xmax=region[1], facecolor="r", alpha=0.3)
+    print(anomaly_regions)
     plt.show()
 
 
@@ -70,9 +70,9 @@ if __name__ == '__main__':
         total_length = len(train_data) + len(test_data)
         print("total_length:", total_length, "anomaly ratio:", anomaly_count / len(test_data))
     else:
-        train_dir_path = f"D:\code\\time series\dataset\ECG and PowerDemand\\{dataset_dir}\labeled\\train"
-        test_dir_path = f"D:\code\\time series\dataset\ECG and PowerDemand\\{dataset_dir}\labeled\\test"
-        save_file_path = f"D:\code\\time series\dataset\ECG and PowerDemand\\{dataset_dir}\processed"
+        train_dir_path = f"dataset\ECG and PowerDemand\\{dataset_dir}\labeled\\train"
+        test_dir_path = f"dataset\ECG and PowerDemand\\{dataset_dir}\labeled\\test"
+        save_file_path = f"dataset\ECG and PowerDemand\\{dataset_dir}\processed"
         os.makedirs(save_file_path, exist_ok=True)
         train_data = read_data(train_dir_path, sample_name + '.pkl')
         test_data = read_data(test_dir_path, sample_name + '.pkl')

@@ -6,11 +6,10 @@ import torch
 from torch.utils import data
 from tqdm import tqdm
 
-from decomposition import multi_fft
-from distance import normal_distance, avg_distance
-from mp_algorithm import multi_mp_matrix
+from frequency import multi_fft
 from plot_show import draw_anomaly
-from sklearn.preprocessing import MinMaxScaler
+
+from processing.distance import avg_distance
 
 
 class MAPDataset(data.Dataset):
@@ -59,11 +58,9 @@ class MAPDataset(data.Dataset):
         return (data - np.min(data)) / _range
 
     def draw_dataset(self):
-        # multi_matrix_profile = multi_mp(self.raw_dataset, self.window_length)
         plt.subplot(3, 1, 1)
         plt.plot(self.mp_distances)
         plt.subplot(3, 1, 2)
-        # plt.plot(multi_matrix_profile)
         plt.subplot(3, 1, 3)
         if self.labels is not None:
             draw_anomaly(self.raw_dataset[:, 0], self.labels)
